@@ -84,25 +84,26 @@ module.exports = class GraphDatabase
             headers: headers
             agent: @agent
             json: body ? true
-            encoding: 'utf8'
+            encoding: null
             gzip: true  # This is only for responses: decode if gzipped.
 
         # Important: only pass a callback to Request if a callback was passed
         # to us. This prevents Request from buffering the response in memory
         # (to parse JSON) if the caller prefers to stream the response instead.
         , cb and (err, resp) =>
-            if err
-                # TODO: Do we want to wrap or modify native errors?
-                return cb err
+            if cb
+                if err
+                    # TODO: Do we want to wrap or modify native errors?
+                    return cb err
 
-            if raw
-                # TODO: Do we want to return our own Response object?
-                return cb null, resp
+                if raw
+                    # TODO: Do we want to return our own Response object?
+                    return cb null, resp
 
-            if err = Error._fromResponse resp
-                return cb err
+                if err = Error._fromResponse resp
+                    return cb err
 
-            cb null, _transform resp.body
+                cb null, _transform resp.body
 
 
     ## AUTH
