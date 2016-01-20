@@ -91,19 +91,18 @@ module.exports = class GraphDatabase
         # to us. This prevents Request from buffering the response in memory
         # (to parse JSON) if the caller prefers to stream the response instead.
         , cb and (err, resp) =>
-            if cb
-                if err
-                    # TODO: Do we want to wrap or modify native errors?
-                    return cb err
+            if err
+                # TODO: Do we want to wrap or modify native errors?
+                return cb err
 
-                if raw
-                    # TODO: Do we want to return our own Response object?
-                    return cb null, resp
+            if raw
+                # TODO: Do we want to return our own Response object?
+                return cb null, resp
 
-                if err = Error._fromResponse resp
-                    return cb err
+            if err = Error._fromResponse resp
+                return cb err
 
-                cb null, _transform resp.body
+            cb null, _transform resp.body
 
 
     ## AUTH
@@ -253,86 +252,86 @@ module.exports = class GraphDatabase
         # Easy enough for us to parse ourselves, which we do, when needed.
         #
         @http {method, path, headers, body, raw: true}, (err, resp) =>
+            if cb
+                if err
+                    # TODO: Do we want to wrap or modify native errors?
+                    # NOTE: This includes our own errors for non-2xx responses.
+                    return cb err
 
-            if err
-                # TODO: Do we want to wrap or modify native errors?
-                # NOTE: This includes our own errors for non-2xx responses.
-                return cb err
+                if err = Error._fromResponse resp
+                    return cb err
 
-            if err = Error._fromResponse resp
-                return cb err
+                _tx?._updateFromResponse resp
 
-            _tx?._updateFromResponse resp
+                {results, errors} = resp.body
 
-            {results, errors} = resp.body
+                # Parse any results first, before errors, in case this is a batch
+                # request, where we want to return results alongside errors.
+                # The top-level `results` is an array of results corresponding to
+                # the `statements` (queries) inputted.
+                # We want to transform each query's results from Neo4j's complex
+                # format to a simple array of dictionaries.
+                results =
+                    for result, i in results
+                        {columns, data} = result
+                        format = formats[i]
 
-            # Parse any results first, before errors, in case this is a batch
-            # request, where we want to return results alongside errors.
-            # The top-level `results` is an array of results corresponding to
-            # the `statements` (queries) inputted.
-            # We want to transform each query's results from Neo4j's complex
-            # format to a simple array of dictionaries.
-            results =
-                for result, i in results
-                    {columns, data} = result
-                    format = formats[i]
+                        # The `data` for each query is an array of rows, but each of
+                        # its elements is actually a dictionary of results keyed by
+                        # response format. We only request one format per query.
+                        # The value of each format is an array of rows, where each
+                        # row is an array of column values. We transform those rows
+                        # into dictionaries keyed by column names. Finally, we also
+                        # parse nodes & relationships into object instances if this
+                        # query didn't request a raw format. Phew!
+                        $(data).pluck(format).map (row) ->
+                            result = {}
 
-                    # The `data` for each query is an array of rows, but each of
-                    # its elements is actually a dictionary of results keyed by
-                    # response format. We only request one format per query.
-                    # The value of each format is an array of rows, where each
-                    # row is an array of column values. We transform those rows
-                    # into dictionaries keyed by column names. Finally, we also
-                    # parse nodes & relationships into object instances if this
-                    # query didn't request a raw format. Phew!
-                    $(data).pluck(format).map (row) ->
-                        result = {}
+                            for column, j in columns
+                                result[column] = row[j]
 
-                        for column, j in columns
-                            result[column] = row[j]
+                            if format is 'rest'
+                                result = _transform result
 
-                        if format is 'rest'
-                            result = _transform result
+                            result
 
-                        result
+                # What exactly we return depends on how we were called:
+                #
+                # - Batch: if an array of queries were given, we always return an
+                #   array of each query's results.
+                #
+                # - Single: if a single query was given, we always return just that
+                #   query's results.
+                #
+                # - Void: if neither was given, we explicitly return null.
+                #   This is for transaction actions, e.g. commit, rollback, renew.
+                #
+                # We're already set up for the batch case by default, so we only
+                # need to account for the other cases.
+                #
+                if single
+                    # This means a batch of queries was *not* given, but we still
+                    # normalized to an array of queries...
+                    if queries.length
+                        # This means a single query was given:
+                        assert.equal queries.length, 1,
+                            'There should be *exactly* one query given.'
+                        assert results.length <= 1,
+                            'There should be *at most* one set of results.'
+                        results = results[0]
+                    else
+                        # This means no query was given:
+                        assert.equal results.length, 0,
+                            'There should be *no* results.'
+                        results = null
 
-            # What exactly we return depends on how we were called:
-            #
-            # - Batch: if an array of queries were given, we always return an
-            #   array of each query's results.
-            #
-            # - Single: if a single query was given, we always return just that
-            #   query's results.
-            #
-            # - Void: if neither was given, we explicitly return null.
-            #   This is for transaction actions, e.g. commit, rollback, renew.
-            #
-            # We're already set up for the batch case by default, so we only
-            # need to account for the other cases.
-            #
-            if single
-                # This means a batch of queries was *not* given, but we still
-                # normalized to an array of queries...
-                if queries.length
-                    # This means a single query was given:
-                    assert.equal queries.length, 1,
-                        'There should be *exactly* one query given.'
-                    assert results.length <= 1,
-                        'There should be *at most* one set of results.'
-                    results = results[0]
-                else
-                    # This means no query was given:
-                    assert.equal results.length, 0,
-                        'There should be *no* results.'
-                    results = null
+                if errors.length
+                    # TODO: Is it possible to get back more than one error?
+                    # If so, is it fine for us to just use the first one?
+                    [error] = errors
+                    err = Error._fromObject error
 
-            if errors.length
-                # TODO: Is it possible to get back more than one error?
-                # If so, is it fine for us to just use the first one?
-                [error] = errors
-                err = Error._fromObject error
-
-            cb err, results
+                cb err, results
 
     beginTransaction: ->
         new Transaction @
